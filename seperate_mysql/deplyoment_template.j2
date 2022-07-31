@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: Service # TODO: make ingress
+metadata:
+  name: nearbeach-{{ instance_name }}
+spec:
+  type: NodePort
+  selector:
+    app: nearbeach-{{ instance_name }}
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nearbeach-{{ instance_name }}-db
+spec:
+  type: LoadBalancer
+  selector:
+    statefulset.kubernetes.io/pod-name: "{{ mysql_pod_name }}"
+  ports:
+    - protocol: TCP
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nearbeach-{{ instance_name }}-nearbeach-config
+data:
+  SECRET_KEY: REPLACEME # BLAH
+  SMTP_EMAIL_HOST: smtp.example.com # BLAH
+  SMTP_EMAIL_PORT: "2525" # BLAH
+  SMTP_EMAIL_HOST_USER: "dummy" # BLAH
+  SMTP_EMAIL_HOST_PASSWORD: "dummy" # BLAH
+  MYSQL_POD_DOMAIN_NAME: "nearbeach-{{ instance_name }}-db.{{ k8s_namespace | default('default') }}.svc.cluster.local"
+  MYSQL_DATABASE: NearBeach{{ instance_name | capitalize }}2
+  MYSQL_USER: nearbeach
+  MYSQL_PASSWORD: Test1234_ # This should be moved into a secret
+  ADMIN_USERNAME: admin
+  ADMIN_EMAIL: admin@hello.local
+  CSRF_TRUSTED_URLS: https://nearbeach.example.com
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nearbeach-{{ instance_name }}
+  labels:
+    app.kubernetes.io/name: nearbeach
+    app.kubernetes.io/instance: nearbeach-{{ instance_name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nearbeach-{{ instance_name }}
+  template:
+    metadata:
+      labels:
+        app: nearbeach-{{ instance_name }}
+    spec:
+      initContainers:
+        - name: init-mydb # Replace with a simple container which just logs in and create stuff
+          image: docker.io/linuxserver/mariadb:latest
+          command: 
+            - bash
+            - "-c"
+            - |
+              echo "CREATE DATABASE IF NOT EXISTS ${MYSQL_DATABASE};" > create_user_and_db.sql
+              echo "CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';" >> create_user_and_db.sql
+              echo "GRANT ALL ON ${MYSQL_DATABASE}.* TO '${MYSQL_USER}'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';" >> create_user_and_db.sql
+              echo "exit" >> create_user_and_db.sql
+              cat create_user_and_db.sql
+              echo ${MYSQL_POD_DOMAIN_NAME}
+              echo mysql -h ${MYSQL_POD_DOMAIN_NAME} -u root -password="${MYSQL_ROOT_PASSWORD}"
+              mysql -h ${MYSQL_POD_DOMAIN_NAME} -u root --password="${MYSQL_ROOT_PASSWORD}" < create_user_and_db.sql
+          envFrom:
+            - configMapRef:
+                name: nearbeach-{{ instance_name }}-nearbeach-config
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nearbeach-db-secret
+                  key: password
+      containers:
+        - name:  nearbeach-{{ instance_name }}-nearbeach
+          image: robotichead/nearbeach:development-0.29.1
+          command: 
+              - sh
+          args: # This should be moved into the container
+              - -c 
+              - >
+                python manage.py wait_for_database &&
+                ls -al &&
+                python manage.py migrate &&
+                python manage.py initadmin &&
+                python manage.py runserver 0.0.0.0:8000
+          ports: 
+            - containerPort: 8000
+              name: web
+            - containerPort: 2525
+              name: smtp
+          envFrom:
+            - configMapRef:
+                name: nearbeach-{{ instance_name }}-nearbeach-config
+          env:
+            - name: MYSQL_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: nearbeach-{{ instance_name }}-nearbeach-config
+                  key: MYSQL_POD_DOMAIN_NAME

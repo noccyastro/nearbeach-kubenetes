@@ -1,0 +1,18 @@
+---
+# This just for playing with minikube for real stuff see:
+# https://kubernetes.io/docs/concepts/storage/dynamic-provisioning/
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: "nearbeach-{{ instance_name }}-db-volume" #
+  labels:
+    type: local # note this should change depening on your platform 
+    app.kubernetes.io/name: nearbreach-db-volume
+    app.kubernetes.io/instance: nearbreach-db-volume-{{ instance_name }}
+spec:
+  capacity:
+    storage: "{{ required_storage | default('10Gi') }}" # Tweak this
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/data" # note this should change depening on your platform

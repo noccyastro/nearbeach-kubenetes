@@ -1,0 +1,151 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nearbeach-prod-service
+spec:
+  selector:
+    app: NearbeachProd
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  clusterIP: None
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nearbeach-prod-ss-lb
+spec:
+  type: LoadBalancer
+  selector:
+    statefulset.kubernetes.io/pod-name: nearbeach-prod-ss-0
+  ports:
+  - protocol: TCP
+    port: 8000
+    targetPort: 8000
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nearbeach-prod-db-volume
+  labels:
+    type: local
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/data"
+# ---
+# apiVersion: v1
+# data:
+#   password: UkVQTEFDRU1FCg==
+# kind: Secret
+# metadata:
+#   name: nearbeach-prod-db-secret
+# type: Opaque
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nearbeach-prod-nearbeach-config
+data:
+  SECRET_KEY: REPLACEME
+  SMTP_EMAIL_HOST: smtp.example.com
+  SMTP_EMAIL_PORT: "2525"
+  SMTP_EMAIL_HOST_USER: "dummy"
+  SMTP_EMAIL_HOST_PASSWORD: "dummy"
+  MYSQL_DATABASE: NearBeach
+  MYSQL_USER: nearbeach
+  MYSQL_PASSWORD: Test1234_ # This should be moved int secret
+  MYSQL_ROOT_PASSWORD: REPLACEMEHello # This should be moved int secret
+  ADMIN_USERNAME: admin
+  ADMIN_EMAIL: admin@hello.local
+  CSRF_TRUSTED_URLS: https://nearbeach.example.com
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nearbeach-prod-ss
+spec:
+  selector:
+    matchLabels:
+      app: NearbeachProd # has to match .spec.template.metadata.labels
+  serviceName: "nearbeach-prod-service"
+  replicas: 1 # by default is 1
+  minReadySeconds: 10 # by default is 0
+  template:
+    metadata:
+      labels:
+        app: NearbeachProd # has to match .spec.selector.matchLabels
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name:  nearbeach-prod-db
+          image: docker.io/linuxserver/mariadb:latest # Used this becuase mariadb wasn't getting root password set for some reason.
+          ports:  
+            - containerPort: 3306
+              name: mysql
+          volumeMounts:
+            - name: nearbeach-prod-db-volume-claim
+              mountPath: /var/lib/mysql
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                # secretKeyRef:
+                #   name: nearbeach-prod-db-secret
+                #   key: password
+                configMapKeyRef:
+                  name: nearbeach-prod-nearbeach-config
+                  key: MYSQL_ROOT_PASSWORD
+            - name: MYSQL_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: nearbeach-prod-nearbeach-config
+                  key: MYSQL_DATABASE
+            - name: MYSQL_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: nearbeach-prod-nearbeach-config
+                  key: MYSQL_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                configMapKeyRef:
+                  name: nearbeach-prod-nearbeach-config
+                  key: MYSQL_PASSWORD
+        - name: nearbeach-prod-nearbeach
+          image: robotichead/nearbeach:development-0.29.1
+          command: 
+              - sh
+          args:
+             - -c 
+             - |
+                python manage.py wait_for_database &&
+                ls -al &&
+                python manage.py migrate &&
+                python manage.py initadmin &&
+                python manage.py runserver 0.0.0.0:8000
+          ports: 
+            - containerPort: 8000
+              name: web
+            - containerPort: 2525
+              name: smtp
+          envFrom:
+            - configMapRef:
+                name: nearbeach-prod-nearbeach-config
+          env:
+            - name: MYSQL_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+  volumeClaimTemplates:
+  - metadata:
+      name: nearbeach-prod-db-volume-claim
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:   
+          storage: 10Gi

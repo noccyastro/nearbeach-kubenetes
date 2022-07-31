@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nearbeach-db-service
+spec:
+  selector:
+    app: NearbeachDatabaseService
+  ports:
+    - name: mysql
+      protocol: TCP
+      port: 3306
+      targetPort: 3306
+  clusterIP: None
+---
+apiVersion: v1
+data:
+  password: UkVQTEFDRU1F # Change this its base64 encoded
+kind: Secret
+metadata:
+  name: nearbeach-db-secret
+type: Opaque
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nearbeach-db-ss
+spec:
+  selector:
+    matchLabels:
+      app: NearbeachDatabaseService # has to match .spec.template.metadata.labels
+  serviceName: "nearbeach-db-service"
+  replicas: 1 # by default is 1
+  minReadySeconds: 10 # by default is 0 # TODO: Replace with a probe
+  template:
+    metadata:
+      labels:
+        app: NearbeachDatabaseService # has to match .spec.selector.matchLabels
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name:  nearbeach-db-service
+          image: docker.io/linuxserver/mariadb:latest # Used this becuase mariadb wasn't getting root password set for some reason.
+          ports:  
+            - containerPort: 3306
+              name: mysql
+          volumeMounts:
+            - name: nearbeach-db-volume-claim
+              mountPath: /var/lib/mysql
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nearbeach-db-secret
+                  key: password
+  volumeClaimTemplates:
+  - metadata:
+      name: nearbeach-db-volume-claim
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:   
+          storage: 10Gi # Tweak this to match your PVs
+              
